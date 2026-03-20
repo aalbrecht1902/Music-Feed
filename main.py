@@ -717,6 +717,41 @@ def build_sections(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return sections
 
 
+def make_blurb(item: dict[str, Any]) -> str:
+    tags = item["tags"]
+    artist = item["artist_guess"] or "Unknown artist"
+    album = item["album_guess"] or item["title"]
+    source = item["source"]
+
+    if "dub-techno" in tags:
+        return f"{artist} leans into submerged dub pressure with a colder, more spacious edge."
+    if "drone" in tags:
+        return f"{album} sits in the drone lane: slow-moving, textural and heavy on tone."
+    if "field" in tags:
+        return f"{album} folds field texture into the ambient frame without losing focus."
+    if "glacial" in tags:
+        return f"{artist} pushes this toward glacial ambient with a wide, misted-out feel."
+    return f"Surfaced via {source}, this feels close to your zone without landing on the obvious names."
+
+
+def select_showcase_items(items: list[dict[str, Any]], limit: int = 10) -> list[dict[str, Any]]:
+    playable = [item for item in items if item["embed_url"] and not item["owned"]]
+    fallback = [item for item in items if not item["owned"]]
+
+    chosen: list[dict[str, Any]] = []
+    seen: set[str] = set()
+
+    for pool in (playable, fallback):
+        for item in pool:
+            if item["item_id"] in seen:
+                continue
+            chosen.append(item)
+            seen.add(item["item_id"])
+            if len(chosen) == limit:
+                return chosen
+    return chosen
+
+
 def render_feedback_link(item_id: str, value: str, label: str) -> str:
     return f'<a href="/feedback?item_id={item_id}&value={value}" class="pill">{label}</a>'
 
@@ -724,18 +759,14 @@ def render_feedback_link(item_id: str, value: str, label: str) -> str:
 def render_card(item: dict[str, Any]) -> str:
     title = escape(item["title"])
     source = escape(item["source"])
-    link = escape(item["link"])
-    summary = escape(item["summary"])
     bandcamp_url = escape(item["bandcamp_url"])
     embed_url = escape(item["embed_url"])
     artist_guess = escape(item["artist_guess"])
     album_guess = escape(item["album_guess"])
-    owned = bool(item["owned"])
-    tags = " / ".join(str(tag) for tag in item["tags"])
     item_id = escape(item["item_id"])
-    score = escape(str(item["current_score"]))
+    blurb = escape(make_blurb(item))
 
-    links = [f'<a href="/out/{item_id}" target="_blank" rel="noreferrer">source</a>']
+    links = [f'<a href="/out/{item_id}" target="_blank" rel="noreferrer">open source</a>']
     if bandcamp_url:
         links.append(f'<a href="{bandcamp_url}" target="_blank" rel="noreferrer">bandcamp</a>')
 
@@ -745,52 +776,29 @@ def render_card(item: dict[str, Any]) -> str:
             f'<div class="embed-wrap"><iframe loading="lazy" src="{embed_url}"></iframe></div>'
         )
 
-    summary_html = f"<p>{summary}</p>" if summary else ""
-    guess_html = ""
-    if artist_guess or album_guess:
-        guess_html = (
-            f'<div class="guess">{artist_guess or "Unknown artist"}'
-            f'{(" · " + album_guess) if album_guess else ""}</div>'
-        )
-    owned_html = '<div class="owned">Already in library</div>' if owned else ""
-    tags_html = f'<div class="tags">{escape(tags)}</div>' if tags else ""
     feedback_html = " ".join(
         [
-            render_feedback_link(item["item_id"], "like", "Like"),
-            render_feedback_link(item["item_id"], "weirder", "Weirder"),
-            render_feedback_link(item["item_id"], "hide", "Too obvious"),
-            render_feedback_link(item["item_id"], "owned", "Already have it"),
+            render_feedback_link(item["item_id"], "like", "save"),
+            render_feedback_link(item["item_id"], "weirder", "weirder"),
+            render_feedback_link(item["item_id"], "hide", "skip"),
+            render_feedback_link(item["item_id"], "owned", "owned"),
         ]
     )
 
     return f"""
     <article class="card">
-        <div class="meta">{source} · score {score}</div>
-        <h2>{title}</h2>
-        {guess_html}
-        {owned_html}
-        {tags_html}
-        {summary_html}
-        <div class="links">{' '.join(links)}</div>
-        <div class="feedback">{feedback_html}</div>
+        <div class="card-head">
+          <div>
+            <div class="eyebrow">{source}</div>
+            <h2>{artist_guess or title}</h2>
+            <div class="subhead">{album_guess or title}</div>
+          </div>
+          <div class="card-links">{' '.join(links)}</div>
+        </div>
         {embed_html}
+        <p class="blurb">{blurb}</p>
+        <div class="feedback">{feedback_html}</div>
     </article>
-    """
-
-
-def render_section(section: dict[str, Any]) -> str:
-    cards = "".join(render_card(item) for item in section["items"])
-    return f"""
-    <section class="section">
-      <div class="section-head">
-        <p class="section-kicker">Live section</p>
-        <h2 class="section-title">{escape(section["title"])}</h2>
-        <p class="section-copy">{escape(section["description"])}</p>
-      </div>
-      <div class="grid">
-        {cards}
-      </div>
-    </section>
     """
 
 
@@ -834,14 +842,12 @@ def home(request: Request) -> str:
     seed = request.query_params.get("seed")
     generated_at = datetime.utcnow().strftime("%Y-%m-%d %H:%M UTC")
     picks = pick_rotating_items(seed=seed)
-    sections = build_sections(picks)
-    shown_items = [item for section in sections for item in section["items"]]
-    track_impression(shown_items)
+    showcase_items = select_showcase_items(picks, limit=10)
+    track_impression(showcase_items)
 
     library_path = find_library_path()
     filtered_count = sum(1 for item in picks if bool(item["owned"]))
-    db_note = os.path.basename(DB_PATH)
-    section_html = "".join(render_section(section) for section in sections)
+    card_html = "".join(render_card(item) for item in showcase_items)
     library_note = (
         f"Library filter active from {escape(os.path.basename(library_path))}."
         if library_path
@@ -855,196 +861,167 @@ def home(request: Request) -> str:
         <meta name="viewport" content="width=device-width, initial-scale=1" />
         <style>
           :root {{
-            --paper: rgba(255, 250, 242, 0.76);
-            --ink: #201712;
-            --muted: #68584a;
-            --edge: rgba(32, 23, 18, 0.12);
-            --accent: #b24c2b;
-            --accent-soft: #d28f41;
+            --bg: #0b0f14;
+            --panel: rgba(18, 24, 32, 0.78);
+            --panel-strong: rgba(24, 31, 42, 0.94);
+            --ink: #eef3f8;
+            --muted: #9eacbc;
+            --edge: rgba(255, 255, 255, 0.08);
+            --accent: #83e0c1;
+            --accent-2: #7ba7ff;
           }}
           * {{
             box-sizing: border-box;
           }}
           body {{
             margin: 0;
-            font-family: Georgia, "Times New Roman", serif;
+            font-family: "Helvetica Neue", Helvetica, Arial, sans-serif;
             color: var(--ink);
             background:
-              radial-gradient(circle at top left, rgba(210, 143, 65, 0.28), transparent 34%),
-              radial-gradient(circle at top right, rgba(178, 76, 43, 0.14), transparent 28%),
-              linear-gradient(180deg, #f4eee3 0%, #eadfcf 100%);
+              radial-gradient(circle at top left, rgba(123, 167, 255, 0.26), transparent 28%),
+              radial-gradient(circle at 85% 10%, rgba(131, 224, 193, 0.18), transparent 22%),
+              linear-gradient(180deg, #091018 0%, #0f1621 52%, #0b0f14 100%);
             min-height: 100vh;
           }}
           .shell {{
-            max-width: 1200px;
+            max-width: 1380px;
             margin: 0 auto;
-            padding: 36px 18px 72px;
+            padding: 28px 18px 56px;
           }}
           .hero {{
-            background: linear-gradient(135deg, rgba(255,255,255,0.55), rgba(255,255,255,0.2));
+            background: linear-gradient(135deg, rgba(18,24,32,0.92), rgba(18,24,32,0.72));
             border: 1px solid var(--edge);
             border-radius: 28px;
-            padding: 28px;
-            backdrop-filter: blur(10px);
-            box-shadow: 0 22px 60px rgba(58, 36, 24, 0.12);
+            padding: 28px 28px 22px;
+            backdrop-filter: blur(18px);
+            box-shadow: 0 24px 80px rgba(0, 0, 0, 0.28);
           }}
           .kicker {{
             text-transform: uppercase;
-            letter-spacing: 0.18em;
-            font-size: 0.72rem;
+            letter-spacing: 0.22em;
+            font-size: 0.7rem;
             color: var(--accent);
             margin: 0 0 12px;
           }}
           h1 {{
             margin: 0;
-            font-size: clamp(2.8rem, 8vw, 5.6rem);
-            line-height: 0.92;
-            max-width: 8ch;
+            font-size: clamp(2.8rem, 8vw, 6rem);
+            line-height: 0.9;
+            max-width: 10ch;
+            letter-spacing: -0.04em;
           }}
           .intro {{
-            max-width: 48rem;
-            font-size: 1.05rem;
-            line-height: 1.6;
+            max-width: 38rem;
+            font-size: 1rem;
+            line-height: 1.55;
             color: var(--muted);
-            margin-top: 18px;
+            margin: 14px 0 0;
           }}
           .toolbar {{
             display: flex;
             flex-wrap: wrap;
             align-items: center;
             gap: 12px;
-            margin-top: 22px;
+            margin-top: 18px;
           }}
           .button {{
             appearance: none;
             border: 0;
             border-radius: 999px;
-            background: var(--ink);
-            color: #f8f0e5;
-            padding: 12px 18px;
+            background: linear-gradient(135deg, var(--accent), var(--accent-2));
+            color: #081018;
+            padding: 11px 18px;
             font: inherit;
+            font-weight: 600;
             cursor: pointer;
           }}
           .button:hover {{
-            background: var(--accent);
+            filter: brightness(1.06);
           }}
           .stamp {{
             color: var(--muted);
-            font-size: 0.92rem;
-          }}
-          .section {{
-            margin-top: 34px;
-          }}
-          .section-head {{
-            margin-bottom: 10px;
-          }}
-          .section-kicker {{
-            text-transform: uppercase;
-            letter-spacing: 0.16em;
-            font-size: 0.7rem;
-            color: var(--accent);
-            margin: 0 0 6px;
-          }}
-          .section-title {{
-            margin: 0;
-            font-size: clamp(1.6rem, 3vw, 2.4rem);
-          }}
-          .section-copy {{
-            margin: 8px 0 0;
-            max-width: 42rem;
-            color: var(--muted);
+            font-size: 0.85rem;
           }}
           .grid {{
             display: grid;
-            grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
-            gap: 18px;
+            grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+            gap: 20px;
             margin-top: 22px;
           }}
           .card {{
-            background: var(--paper);
+            background: linear-gradient(180deg, var(--panel) 0%, var(--panel-strong) 100%);
             border: 1px solid var(--edge);
-            border-radius: 22px;
+            border-radius: 24px;
             padding: 18px;
-            box-shadow: 0 18px 40px rgba(58, 36, 24, 0.08);
+            box-shadow: 0 20px 60px rgba(0, 0, 0, 0.22);
           }}
-          .guess {{
-            font-size: 0.96rem;
-            margin-bottom: 10px;
-            color: var(--ink);
+          .card-head {{
+            display: flex;
+            align-items: flex-start;
+            justify-content: space-between;
+            gap: 14px;
+            margin-bottom: 14px;
           }}
-          .owned {{
-            display: inline-block;
-            border-radius: 999px;
-            padding: 5px 10px;
-            font-size: 0.74rem;
-            margin-bottom: 10px;
-            background: rgba(32, 23, 18, 0.09);
-            color: var(--muted);
-          }}
-          .tags {{
-            font-size: 0.78rem;
-            text-transform: uppercase;
-            letter-spacing: 0.08em;
+          .eyebrow {{
             color: var(--accent);
-            margin-bottom: 12px;
-          }}
-          .meta {{
-            color: var(--accent);
-            font-size: 0.76rem;
+            font-size: 0.72rem;
             text-transform: uppercase;
-            letter-spacing: 0.12em;
-            margin-bottom: 10px;
+            letter-spacing: 0.16em;
+            margin-bottom: 8px;
           }}
           h2 {{
-            margin: 0 0 10px;
-            font-size: 1.3rem;
-            line-height: 1.15;
+            margin: 0;
+            font-size: 1.22rem;
+            line-height: 1.08;
+            letter-spacing: -0.03em;
+            color: var(--ink);
           }}
-          p {{
+          .subhead {{
+            margin-top: 6px;
             color: var(--muted);
-            line-height: 1.55;
-            margin: 0 0 14px;
+            font-size: 0.92rem;
           }}
-          .links, .feedback {{
+          .blurb {{
+            color: var(--muted);
+            line-height: 1.45;
+            font-size: 0.94rem;
+            margin: 14px 0 0;
+          }}
+          .card-links, .feedback {{
             display: flex;
             flex-wrap: wrap;
-            gap: 12px;
-            margin-bottom: 14px;
+            gap: 10px;
           }}
           a {{
             color: var(--ink);
             text-decoration: none;
-            border-bottom: 1px solid rgba(32, 23, 18, 0.35);
-            padding-bottom: 2px;
+            border: 1px solid rgba(255, 255, 255, 0.12);
+            border-radius: 999px;
+            padding: 8px 12px;
+            font-size: 0.83rem;
           }}
           a:hover {{
             color: var(--accent);
-            border-color: var(--accent);
-          }}
-          .pill {{
-            border: 1px solid rgba(32, 23, 18, 0.16);
-            border-radius: 999px;
-            padding: 7px 11px;
-            font-size: 0.84rem;
-            background: rgba(255,255,255,0.3);
-          }}
-          .pill:hover {{
-            background: rgba(178, 76, 43, 0.08);
+            border-color: rgba(131, 224, 193, 0.38);
+            background: rgba(255, 255, 255, 0.03);
           }}
           .embed-wrap {{
             overflow: hidden;
-            border-radius: 16px;
-            background: rgba(32, 23, 18, 0.05);
+            border-radius: 18px;
+            background: rgba(255, 255, 255, 0.04);
           }}
           iframe {{
             width: 100%;
-            min-height: 440px;
+            min-height: 472px;
             border: 0;
           }}
+          .feedback {{
+            margin-top: 14px;
+          }}
           .footer {{
-            margin-top: 18px;
+            margin-top: 20px;
             color: var(--muted);
-            font-size: 0.94rem;
+            font-size: 0.85rem;
           }}
           @media (max-width: 640px) {{
             .shell {{
@@ -1054,8 +1031,11 @@ def home(request: Request) -> str:
               padding: 20px;
               border-radius: 22px;
             }}
+            .card-head {{
+              flex-direction: column;
+            }}
             iframe {{
-              min-height: 380px;
+              min-height: 420px;
             }}
           }}
         </style>
@@ -1063,21 +1043,20 @@ def home(request: Request) -> str:
       <body>
         <main class="shell">
           <section class="hero">
-            <p class="kicker">Adaptive feed</p>
+            <p class="kicker">Live underground feed</p>
             <h1>Underground Issue</h1>
             <p class="intro">
-              A live recommendation engine for ambient, drone and submerged electronics.
-              It crawls blogs and Reddit, tries to find the Bandcamp trail, filters against
-              your library when available, remembers what it showed you, and learns from your feedback.
+              Ten live Bandcamp-led finds pulled from blogs and Reddit, filtered away from your library when possible and tuned by your feedback.
             </p>
             <div class="toolbar">
-              <button class="button" onclick="window.location='/?seed=' + Date.now()">Refresh finds</button>
+              <button class="button" onclick="window.location='/?seed=' + Date.now()">Refresh 10 picks</button>
               <span class="stamp">Generated {generated_at}</span>
               <span class="stamp">{filtered_count} owned matches pushed down</span>
-              <span class="stamp">Memory: {escape(db_note)}</span>
             </div>
           </section>
-          {section_html}
+          <section class="grid">
+            {card_html}
+          </section>
           <p class="footer">
             Sources: A Closer Listen, Headphone Commute, Fluid Radio, Boomkat,
             r/ambientmusic, r/experimentalmusic, r/BandCamp. {library_note}
