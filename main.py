@@ -4,6 +4,7 @@ from datetime import datetime
 from functools import lru_cache
 from html import escape
 import hashlib
+import json
 import os
 import plistlib
 from random import Random
@@ -311,6 +312,18 @@ def get_bandcamp_embed(url: str | None) -> str | None:
         meta = soup.find("meta", attrs={"property": "og:video"})
         if meta and meta.get("content"):
             return normalize_url(meta["content"])
+
+        props = soup.find("meta", attrs={"name": "bc-page-properties"})
+        if props and props.get("content"):
+            data = json.loads(props["content"])
+            item_id = data.get("item_id")
+            item_type = data.get("item_type")
+            if item_id and item_type:
+                player_key = "album" if item_type == "a" else "track"
+                return (
+                    f"https://bandcamp.com/EmbeddedPlayer/{player_key}={item_id}/"
+                    "size=large/bgcol=0f1621/linkcol=83e0c1/tracklist=false/artwork=small/transparent=true/"
+                )
     except Exception as exc:
         print(f"Bandcamp embed lookup failed for {url}: {exc}")
     return None
@@ -737,11 +750,13 @@ def make_blurb(item: dict[str, Any]) -> str:
 def select_showcase_items(items: list[dict[str, Any]], limit: int = 10) -> list[dict[str, Any]]:
     playable = [item for item in items if item["embed_url"] and not item["owned"]]
     fallback = [item for item in items if not item["owned"]]
+    owned_playable = [item for item in items if item["embed_url"] and item["owned"]]
+    owned_fallback = [item for item in items if item["owned"]]
 
     chosen: list[dict[str, Any]] = []
     seen: set[str] = set()
 
-    for pool in (playable, fallback):
+    for pool in (playable, fallback, owned_playable, owned_fallback):
         for item in pool:
             if item["item_id"] in seen:
                 continue
@@ -1044,7 +1059,7 @@ def home(request: Request) -> str:
         <main class="shell">
           <section class="hero">
             <p class="kicker">Live underground feed</p>
-            <h1>Underground Issue</h1>
+            <h1>Live Bandcamp finds</h1>
             <p class="intro">
               Ten live Bandcamp-led finds pulled from blogs and Reddit, filtered away from your library when possible and tuned by your feedback.
             </p>
