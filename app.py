@@ -1,111 +1,177 @@
 from fastapi import FastAPI
+from fastapi.responses import HTMLResponse
 import requests
 from bs4 import BeautifulSoup
 import feedparser
 import random
+from urllib.parse import quote
 
 app = FastAPI()
 
-# ====== YOUR TASTE ======
+HEADERS = {
+    "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0 Safari/537.36"
+}
+
 YOUR_ARTISTS = [
     "GAS",
     "Deepchord",
     "Loscil",
     "Tim Hecker",
-    "KMRU"
+    "KMRU",
 ]
 
-YOUR_LABELS = [
-    "Raster-Noton",
-    "Hospital Productions",
-    "Boomkat Editions"
-]
-
-# ====== UNDERGROUND LABEL RSS FEEDS ======
 LABEL_RSS_FEEDS = [
-    "https://raster-noton.com/feed/",             # Raster-Noton
-    "https://hospitalproductions.bandcamp.com/releases?format=RSS",  # Hospital Productions
-    "https://boomkateditions.com/feed/",         # Boomkat Editions
-    "https://crónica.bandcamp.com/releases?format=RSS", # Replace with real feed
-    "https://www.12k.com/feed/"                  # 12k
+    "https://raster-media.net/feed/",
+    "https://hospitalproductions.bandcamp.com/releases?format=RSS",
+    "https://boomkateditions.bandcamp.com/releases?format=RSS",
+    "https://cronica.bandcamp.com/releases?format=RSS",
+    "https://www.12k.com/feed/",
 ]
 
-# ====== BANDCAMP SEARCH ======
-def search_bandcamp(query):
-    """
-    Search Bandcamp for an artist or label
-    Return list of embeddable iframe URLs (up to 3)
-    """
-    url = f"https://bandcamp.com/search?q={query}"
-    headers = {"User-Agent": "Mozilla/5.0"}
+
+def normalize_url(url: str) -> str:
+    if not url:
+        return ""
+    if url.startswith("//"):
+        return f"https:{url}"
+    return url
+
+
+def get_bandcamp_embed(url: str) -> str | None:
     try:
-        r = requests.get(url, headers=headers, timeout=10)
+        r = requests.get(url, headers=HEADERS, timeout=10)
+        r.raise_for_status()
         soup = BeautifulSoup(r.text, "html.parser")
+
+        iframe = soup.find("iframe")
+        if iframe and iframe.get("src"):
+            return normalize_url(iframe["src"])
+
+        meta = soup.find("meta", attrs={"property": "og:video"})
+        if meta and meta.get("content"):
+            return normalize_url(meta["content"])
+
+        return None
+    except Exception as e:
+        print(f"get_bandcamp_embed failed for {url}: {e}")
+        return None
+
+
+def search_bandcamp(query: str) -> list[str]:
+    url = f"https://bandcamp.com/search?q={quote(query)}"
+    try:
+        r = requests.get(url, headers=HEADERS, timeout=10)
+        r.raise_for_status()
+        soup = BeautifulSoup(r.text, "html.parser")
+
+        album_links = []
+        for a in soup.find_all("a", href=True):
+            href = a["href"]
+            if "/album/" in href or "/track/" in href:
+                href = normalize_url(href)
+                if href not in album_links:
+                    album_links.append(href)
+
         embeds = []
-        for iframe in soup.find_all("iframe"):
-            src = iframe.get("src")
-            if src and "bandcamp" in src:
-                embeds.append(src)
-        return embeds[:3]
-    except:
+        for link in album_links[:5]:
+            embed = get_bandcamp_embed(link)
+            if embed:
+                embeds.append(embed)
+            if len(embeds) == 3:
+                break
+
+        return embeds
+    except Exception as e:
+        print(f"search_bandcamp failed for {query}: {e}")
         return []
 
-# ====== PARSE LABEL RSS FEED ======
-def parse_label_feed(feed_url):
+
+def parse_label_feed(feed_url: str) -> list[str]:
     try:
         feed = feedparser.parse(feed_url)
         embeds = []
-        for entry in feed.entries[:3]:  # take latest 3 tracks per feed
-            # look for bandcamp iframe or link
-            if 'link' in entry:
-                embed_src = get_bandcamp_embed(entry.link)
-                if embed_src:
-                    embeds.append(embed_src)
+
+        for entry in feed.entries[:5]:
+            link = entry.get("link")
+            if not link:
+                continue
+
+            embed = get_bandcamp_embed(link)
+            if embed:
+                embeds.append(embed)
+
+            if len(embeds) == 3:
+                break
+
         return embeds
-    except:
+    except Exception as e:
+        print(f"parse_label_feed failed for {feed_url}: {e}")
         return []
 
-# ====== GET BANDCAMP EMBED ======
-def get_bandcamp_embed(url):
-    try:
-        r = requests.get(url, timeout=10)
-        soup = BeautifulSoup(r.text, "html.parser")
-        iframe = soup.find("iframe")
-        if iframe:
-            return iframe["src"]
-        # fallback: if no iframe, return link itself
-        return url
-    except:
-        return url
 
-# ====== MAIN PAGE ======
-@app.get("/")
+@app.get("/", response_class=HTMLResponse)
 def home():
-    html = "<h1>Underground Issue 🎧</h1>"
+    html = """
+    <html>
+    <head>
+        <title>Underground Issue</title>
+        <style>
+            body {
+                font-family: sans-serif;
+                max-width: 1200px;
+                margin: 40px auto;
+                padding: 0 20px;
+                background: #111;
+                color: #eee;
+            }
+            h1, h2 {
+                color: #fff;
+            }
+            .grid {
+                display: flex;
+                flex-wrap: wrap;
+                gap: 20px;
+                margin-bottom: 40px;
+            }
+            iframe {
+                border: 0;
+                width: 350px;
+                height: 470px;
+            }
+            p {
+                color: #bbb;
+            }
+        </style>
+    </head>
+    <body>
+        <h1>Underground Issue</h1>
+    """
 
-    # Randomize artists to keep it fresh
-    random.shuffle(YOUR_ARTISTS)
+    artists = YOUR_ARTISTS[:]
+    random.shuffle(artists)
 
-    # Artists first
-    for artist in YOUR_ARTISTS:
+    for artist in artists:
         embeds = search_bandcamp(artist)
+        html += f"<h2>Related to: {artist}</h2>"
         if embeds:
-            html += f"<h2>Related to: {artist}</h2>"
+            html += '<div class="grid">'
             for e in embeds:
-                if e.startswith("http"):
-                    html += f'<iframe style="border:0;width:350px;height:470px;" src="{e}"></iframe>'
+                html += f'<iframe src="{e}" loading="lazy"></iframe>'
+            html += "</div>"
         else:
-            html += f"<h2>{artist}</h2><p>No embeds found</p>"
+            html += "<p>No embeds found</p>"
 
-    # Label RSS feeds
     for feed_url in LABEL_RSS_FEEDS:
         embeds = parse_label_feed(feed_url)
+        label_name = feed_url.split("//")[-1].split("/")[0]
+        html += f"<h2>Label Spotlight: {label_name}</h2>"
         if embeds:
-            html += f"<h2>Label Spotlight: {feed_url.split('//')[-1]}</h2>"
+            html += '<div class="grid">'
             for e in embeds:
-                if e.startswith("http"):
-                    html += f'<iframe style="border:0;width:350px;height:470px;" src="{e}"></iframe>'
+                html += f'<iframe src="{e}" loading="lazy"></iframe>'
+            html += "</div>"
         else:
-            html += f"<h2>Label Spotlight: {feed_url.split('//')[-1]}</h2><p>No recent embeds</p>"
+            html += "<p>No recent embeds</p>"
 
+    html += "</body></html>"
     return html
