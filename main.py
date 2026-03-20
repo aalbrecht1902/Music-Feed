@@ -45,18 +45,18 @@ REDDIT_SOURCES = [
 ]
 
 BANDCAMP_FEEDS = [
-    ("Astral Industries", "https://astralindustries.bandcamp.com/music?format=rss"),
-    ("Mysteries of the Deep", "https://mysteriesofthedeep.bandcamp.com/music?format=rss"),
-    ("Motion Ward", "https://motionward.bandcamp.com/music?format=rss"),
-    ("West Mineral", "https://westmineral.bandcamp.com/music?format=rss"),
-    ("Peak Oil", "https://peakoil.bandcamp.com/music?format=rss"),
-    ("Efficient Space", "https://efficientspace.bandcamp.com/music?format=rss"),
-    ("Latency", "https://latency.bandcamp.com/music?format=rss"),
-    ("Further Records", "https://furtherrecords.bandcamp.com/music?format=rss"),
-    ("A Strangely Isolated Place", "https://astrangelyisolatedplace.bandcamp.com/music?format=rss"),
-    ("Mule Musiq", "https://mulemusiq.bandcamp.com/music?format=rss"),
-    ("Touch", "https://touch33.bandcamp.com/music?format=rss"),
-    ("Room40", "https://room40.bandcamp.com/music?format=rss"),
+    ("Astral Industries", "https://astralindustries.bandcamp.com/releases?format=rss"),
+    ("Mysteries of the Deep", "https://mysteriesofthedeep.bandcamp.com/releases?format=rss"),
+    ("Motion Ward", "https://motionward.bandcamp.com/releases?format=rss"),
+    ("West Mineral", "https://westmineral.bandcamp.com/releases?format=rss"),
+    ("Peak Oil", "https://peakoil.bandcamp.com/releases?format=rss"),
+    ("Efficient Space", "https://efficientspace.bandcamp.com/releases?format=rss"),
+    ("Latency", "https://latency.bandcamp.com/releases?format=rss"),
+    ("Further Records", "https://furtherrecords.bandcamp.com/releases?format=rss"),
+    ("A Strangely Isolated Place", "https://astrangelyisolatedplace.bandcamp.com/releases?format=rss"),
+    ("Mule Musiq", "https://mulemusiq.bandcamp.com/releases?format=rss"),
+    ("Touch", "https://touch33.bandcamp.com/releases?format=rss"),
+    ("Room40", "https://room40.bandcamp.com/releases?format=rss"),
 ]
 
 BANDCAMP_RE = re.compile(r"https?://[^\s\"'>]+bandcamp\.com[^\s\"'>]*", re.IGNORECASE)
