@@ -36,14 +36,24 @@ REFRESH_TTL_SECONDS = 15 * 60
 BLOG_FEEDS = [
     ("A Closer Listen", "https://acloserlisten.com/feed/"),
     ("Headphone Commute", "https://headphonecommute.com/feed/"),
-    ("Fluid Radio", "https://fluid-radio.co.uk/feed/"),
-    ("Boomkat", "https://boomkat.com/feed"),
 ]
 
 REDDIT_SOURCES = [
     ("r/ambientmusic", "https://www.reddit.com/r/ambientmusic/new.json?limit=20"),
     ("r/experimentalmusic", "https://www.reddit.com/r/experimentalmusic/new.json?limit=20"),
     ("r/bandcamp", "https://www.reddit.com/r/BandCamp/new.json?limit=20"),
+]
+
+BANDCAMP_FEEDS = [
+    ("Room40", "https://room40.bandcamp.com/music?format=rss"),
+    ("West Mineral", "https://westmineral.bandcamp.com/music?format=rss"),
+    ("Longform Editions", "https://longformeditions.bandcamp.com/music?format=rss"),
+    ("Astral Industries", "https://astralindustries.bandcamp.com/music?format=rss"),
+    ("Touch", "https://touch33.bandcamp.com/music?format=rss"),
+    ("Past Inside the Present", "https://pitp.bandcamp.com/music?format=rss"),
+    ("Motion Ward", "https://motionward.bandcamp.com/music?format=rss"),
+    ("Dauw", "https://dauw.bandcamp.com/music?format=rss"),
+    ("Mysteries of the Deep", "https://mysteriesofthedeep.bandcamp.com/music?format=rss"),
 ]
 
 BANDCAMP_RE = re.compile(r"https?://[^\s\"'>]+bandcamp\.com[^\s\"'>]*", re.IGNORECASE)
@@ -720,6 +730,32 @@ def fetch_blog_items() -> list[dict[str, Any]]:
     return items
 
 
+def fetch_bandcamp_feed_items() -> list[dict[str, Any]]:
+    items: list[dict[str, Any]] = []
+    for source_name, feed_url in BANDCAMP_FEEDS:
+        try:
+            feed = feedparser.parse(feed_url)
+            for entry in feed.entries[:12]:
+                title = entry.get("title", "").strip()
+                link = normalize_url(entry.get("link", "").strip())
+                summary = entry.get("summary", "") or entry.get("description", "")
+                if not title or not link or is_blocked_title(title):
+                    continue
+                items.append(
+                    build_item(
+                        source=source_name,
+                        title=title,
+                        link=link,
+                        summary=summary,
+                        bandcamp_url=link,
+                        source_score=4.2,
+                    )
+                )
+        except Exception as exc:
+            print(f"Bandcamp feed failed for {source_name}: {exc}")
+    return items
+
+
 def fetch_reddit_items() -> list[dict[str, Any]]:
     items: list[dict[str, Any]] = []
     for source_name, url in REDDIT_SOURCES:
@@ -766,7 +802,7 @@ def pick_rotating_items(seed: str | None = None, force_refresh: bool = False) ->
         items.sort(key=lambda item: (bool(item["owned"]), not bool(item["embed_url"]), -float(item["current_score"])))
         return items
 
-    pool = fetch_blog_items() + fetch_reddit_items()
+    pool = fetch_bandcamp_feed_items() + fetch_blog_items() + fetch_reddit_items()
     unique: dict[tuple[str, str], dict[str, Any]] = {}
 
     for item in pool:
