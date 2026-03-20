@@ -373,9 +373,12 @@ def is_blocked_title(title: str) -> bool:
 def get_bandcamp_embed(url: str | None) -> str | None:
     if not url:
         return None
+    if "bandcamp.com/EmbeddedPlayer/" in url:
+        return url
     try:
         response = requests.get(url, headers=HEADERS, timeout=4)
         response.raise_for_status()
+        html = response.text
         soup = BeautifulSoup(response.text, "html.parser")
 
         iframe = soup.find("iframe")
@@ -397,6 +400,29 @@ def get_bandcamp_embed(url: str | None) -> str | None:
                     f"https://bandcamp.com/EmbeddedPlayer/{player_key}={item_id}/"
                     "size=large/bgcol=0f1621/linkcol=83e0c1/tracklist=false/artwork=small/transparent=true/"
                 )
+
+        match = re.search(r'"item_type"\s*:\s*"([at])".*?"item_id"\s*:\s*(\d+)', html, re.DOTALL)
+        if match:
+            player_key = "album" if match.group(1) == "a" else "track"
+            item_id = match.group(2)
+            return (
+                f"https://bandcamp.com/EmbeddedPlayer/{player_key}={item_id}/"
+                "size=large/bgcol=0f1621/linkcol=83e0c1/tracklist=false/artwork=small/transparent=true/"
+            )
+
+        album_match = re.search(r'"album_id"\s*:\s*(\d+)', html)
+        if album_match:
+            return (
+                f"https://bandcamp.com/EmbeddedPlayer/album={album_match.group(1)}/"
+                "size=large/bgcol=0f1621/linkcol=83e0c1/tracklist=false/artwork=small/transparent=true/"
+            )
+
+        track_match = re.search(r'"track_id"\s*:\s*(\d+)', html)
+        if track_match:
+            return (
+                f"https://bandcamp.com/EmbeddedPlayer/track={track_match.group(1)}/"
+                "size=large/bgcol=0f1621/linkcol=83e0c1/tracklist=false/artwork=small/transparent=true/"
+            )
     except Exception as exc:
         print(f"Bandcamp embed lookup failed for {url}: {exc}")
     return None
