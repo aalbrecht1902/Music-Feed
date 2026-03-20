@@ -45,15 +45,18 @@ REDDIT_SOURCES = [
 ]
 
 BANDCAMP_FEEDS = [
-    ("Room40", "https://room40.bandcamp.com/music?format=rss"),
-    ("West Mineral", "https://westmineral.bandcamp.com/music?format=rss"),
-    ("Longform Editions", "https://longformeditions.bandcamp.com/music?format=rss"),
     ("Astral Industries", "https://astralindustries.bandcamp.com/music?format=rss"),
-    ("Touch", "https://touch33.bandcamp.com/music?format=rss"),
-    ("Past Inside the Present", "https://pitp.bandcamp.com/music?format=rss"),
-    ("Motion Ward", "https://motionward.bandcamp.com/music?format=rss"),
-    ("Dauw", "https://dauw.bandcamp.com/music?format=rss"),
     ("Mysteries of the Deep", "https://mysteriesofthedeep.bandcamp.com/music?format=rss"),
+    ("Motion Ward", "https://motionward.bandcamp.com/music?format=rss"),
+    ("West Mineral", "https://westmineral.bandcamp.com/music?format=rss"),
+    ("Peak Oil", "https://peakoil.bandcamp.com/music?format=rss"),
+    ("Efficient Space", "https://efficientspace.bandcamp.com/music?format=rss"),
+    ("Latency", "https://latency.bandcamp.com/music?format=rss"),
+    ("Further Records", "https://furtherrecords.bandcamp.com/music?format=rss"),
+    ("A Strangely Isolated Place", "https://astrangelyisolatedplace.bandcamp.com/music?format=rss"),
+    ("Mule Musiq", "https://mulemusiq.bandcamp.com/music?format=rss"),
+    ("Touch", "https://touch33.bandcamp.com/music?format=rss"),
+    ("Room40", "https://room40.bandcamp.com/music?format=rss"),
 ]
 
 BANDCAMP_RE = re.compile(r"https?://[^\s\"'>]+bandcamp\.com[^\s\"'>]*", re.IGNORECASE)
@@ -61,13 +64,23 @@ TITLE_SPLIT_RE = re.compile(r"\s(?:[-|:]\s|by\s)", re.IGNORECASE)
 YEAR_RE = re.compile(r"\b(19|20)\d{2}\b")
 
 SOURCE_WEIGHTS = {
-    "A Closer Listen": 3.5,
-    "Headphone Commute": 3.3,
-    "Fluid Radio": 3.2,
-    "Boomkat": 2.7,
-    "r/ambientmusic": 2.2,
-    "r/experimentalmusic": 2.1,
-    "r/bandcamp": 2.0,
+    "A Closer Listen": 1.4,
+    "Headphone Commute": 2.0,
+    "Astral Industries": 4.3,
+    "Mysteries of the Deep": 3.8,
+    "Motion Ward": 3.0,
+    "West Mineral": 2.8,
+    "Peak Oil": 3.3,
+    "Efficient Space": 3.7,
+    "Latency": 3.2,
+    "Further Records": 2.9,
+    "A Strangely Isolated Place": 2.6,
+    "Mule Musiq": 3.6,
+    "Touch": 1.8,
+    "Room40": 1.6,
+    "r/ambientmusic": 1.2,
+    "r/experimentalmusic": 0.6,
+    "r/bandcamp": 2.6,
 }
 
 GENERIC_POST_PATTERNS = [
@@ -110,6 +123,33 @@ CATEGORY_KEYWORDS = {
         "longform",
         "sustained",
         "tone",
+    ],
+    "fourth-world": [
+        "fourth world",
+        "hassell",
+        "organic",
+        "tropical",
+        "trumpet",
+        "ritual",
+    ],
+    "minimal-groove": [
+        "dozzy",
+        "hypnotic",
+        "pulse",
+        "groove",
+        "percussion",
+        "polyrhythm",
+        "dub house",
+        "slow techno",
+    ],
+    "warm-electronic": [
+        "carrier",
+        "warm",
+        "hazy",
+        "lush",
+        "melodic",
+        "dubbed-out",
+        "downtempo",
     ],
     "glacial": [
         "ambient",
@@ -598,12 +638,23 @@ def score_item(item: dict[str, Any], stats: dict[str, int]) -> float:
         score -= 8.0
 
     if "dub-techno" in tags:
-        score += 2.0
+        score += 2.8
+    if "minimal-groove" in tags:
+        score += 2.2
+    if "warm-electronic" in tags:
+        score += 1.8
+    if "fourth-world" in tags:
+        score += 1.7
     if "drone" in tags:
-        score += 1.4
+        score += 0.2
     if "glacial" in tags:
-        score += 1.1
+        score -= 0.4
     if "field" in tags:
+        score += 0.2
+
+    if any(word in title for word in ("ambient", "drone", "meditation", "sleep")):
+        score -= 1.2
+    if any(word in title for word in ("dub", "groove", "rhythm", "pulse", "percussion")):
         score += 0.9
 
     if any(word in title for word in ("premiere", "debut", "new release", "recent release")):
@@ -944,14 +995,16 @@ def make_blurb(item: dict[str, Any]) -> str:
     source = item["source"]
 
     if "dub-techno" in tags:
-        return f"{artist} leans into submerged dub pressure with a colder, more spacious edge."
-    if "drone" in tags:
-        return f"{album} sits in the drone lane: slow-moving, textural and heavy on tone."
+        return f"{artist} sits in a dubby, spacious lane with more pulse than pure ambient drift."
+    if "minimal-groove" in tags:
+        return f"{album} leans hypnotic and rhythmic, closer to slow-burn Dozzy territory."
+    if "warm-electronic" in tags:
+        return f"{artist} lands warmer and more listenable, with haze and melody over austerity."
+    if "fourth-world" in tags:
+        return f"{album} has that open, organic fourth-world feel rather than sealed-off drone."
     if "field" in tags:
         return f"{album} folds field texture into the ambient frame without losing focus."
-    if "glacial" in tags:
-        return f"{artist} pushes this toward glacial ambient with a wide, misted-out feel."
-    return f"Surfaced via {source}, this feels close to your zone without landing on the obvious names."
+    return f"Surfaced via {source}, this stays in your zone but aims for something more musical and lived-in."
 
 
 def select_showcase_items(items: list[dict[str, Any]], limit: int = 10) -> list[dict[str, Any]]:
