@@ -31,6 +31,7 @@ HEADERS = {
 ROOT_DIR = os.path.dirname(os.path.abspath(__file__))
 DATA_DIR = os.path.join(ROOT_DIR, "data")
 DB_PATH = os.path.join(DATA_DIR, "underground_issue.db")
+REFRESH_TTL_SECONDS = 15 * 60
 
 BLOG_FEEDS = [
     ("A Closer Listen", "https://acloserlisten.com/feed/"),
@@ -163,6 +164,14 @@ def get_db() -> sqlite3.Connection:
         """
         CREATE INDEX IF NOT EXISTS idx_feedback_item_id
         ON feedback(item_id)
+        """
+    )
+    connection.execute(
+        """
+        CREATE TABLE IF NOT EXISTS app_state (
+            key TEXT PRIMARY KEY,
+            value TEXT NOT NULL
+        )
         """
     )
     return connection
@@ -301,7 +310,7 @@ def get_bandcamp_embed(url: str | None) -> str | None:
     if not url:
         return None
     try:
-        response = requests.get(url, headers=HEADERS, timeout=12)
+        response = requests.get(url, headers=HEADERS, timeout=4)
         response.raise_for_status()
         soup = BeautifulSoup(response.text, "html.parser")
 
@@ -334,7 +343,7 @@ def search_bandcamp(query: str) -> str | None:
         response = requests.get(
             f"https://bandcamp.com/search?q={quote(query)}",
             headers=HEADERS,
-            timeout=12,
+            timeout=4,
         )
         response.raise_for_status()
         soup = BeautifulSoup(response.text, "html.parser")
@@ -446,6 +455,104 @@ def record_candidate(item: dict[str, Any]) -> dict[str, int]:
         return stats
 
 
+def get_cached_candidate(item_id: str) -> sqlite3.Row | None:
+    with get_db() as connection:
+        return connection.execute(
+            """
+            SELECT bandcamp_url, embed_url, current_score, show_count, click_count
+            FROM candidates
+            WHERE item_id = ?
+            """,
+            (item_id,),
+        ).fetchone()
+
+
+def get_state(key: str) -> str:
+    with get_db() as connection:
+        row = connection.execute(
+            "SELECT value FROM app_state WHERE key = ?",
+            (key,),
+        ).fetchone()
+        return str(row["value"]) if row else ""
+
+
+def set_state(key: str, value: str) -> None:
+    with get_db() as connection:
+        connection.execute(
+            """
+            INSERT INTO app_state (key, value)
+            VALUES (?, ?)
+            ON CONFLICT(key) DO UPDATE SET value = excluded.value
+            """,
+            (key, value),
+        )
+
+
+def load_cached_items(limit: int = 60) -> list[dict[str, Any]]:
+    with get_db() as connection:
+        rows = connection.execute(
+            """
+            SELECT item_id, source, title, link, summary, bandcamp_url, embed_url,
+                   artist_guess, album_guess, tags, owned, source_score,
+                   current_score, show_count, click_count
+            FROM candidates
+            ORDER BY owned ASC, embed_url = '' ASC, current_score DESC, last_seen_at DESC
+            LIMIT ?
+            """,
+            (limit,),
+        ).fetchall()
+
+    items: list[dict[str, Any]] = []
+    for row in rows:
+        items.append(
+            {
+                "item_id": str(row["item_id"]),
+                "source": str(row["source"]),
+                "title": str(row["title"]),
+                "link": str(row["link"]),
+                "summary": str(row["summary"]),
+                "bandcamp_url": str(row["bandcamp_url"] or ""),
+                "embed_url": str(row["embed_url"] or ""),
+                "artist_guess": str(row["artist_guess"] or ""),
+                "album_guess": str(row["album_guess"] or ""),
+                "tags": [tag for tag in str(row["tags"] or "").split(",") if tag],
+                "owned": bool(row["owned"]),
+                "source_score": float(row["source_score"] or 0),
+                "current_score": float(row["current_score"] or 0),
+                "feedback": {
+                    "show_count": int(row["show_count"] or 0),
+                    "click_count": int(row["click_count"] or 0),
+                    "like": 0,
+                    "hide": 0,
+                    "weirder": 0,
+                    "owned": 0,
+                },
+            }
+        )
+    return items
+
+
+def should_refresh_sources(force: bool = False) -> bool:
+    if force:
+        return True
+
+    cached_count = len(load_cached_items(limit=12))
+    if cached_count < 10:
+        return True
+
+    last_refresh = get_state("last_refresh_at")
+    if not last_refresh:
+        return True
+
+    try:
+        refreshed_at = datetime.fromisoformat(last_refresh)
+    except ValueError:
+        return True
+
+    age = (datetime.utcnow() - refreshed_at).total_seconds()
+    return age >= REFRESH_TTL_SECONDS
+
+
 def score_item(item: dict[str, Any], stats: dict[str, int]) -> float:
     score = float(item["source_score"])
     tags = item["tags"]
@@ -501,23 +608,19 @@ def build_item(
     clean_summary = clean_text(summary)
     artist_guess, album_guess = infer_artist_and_album(title, clean_summary)
     bandcamp_url = normalize_url(bandcamp_url)
+    link = normalize_url(link) or ""
+    if not bandcamp_url and "bandcamp.com/" in link:
+        bandcamp_url = link
 
-    if not bandcamp_url:
-        search_query = " ".join(
-            part for part in [artist_guess, album_guess, title] if part
-        )
-        bandcamp_url = search_bandcamp(search_query)
-
-    embed_url = get_bandcamp_embed(bandcamp_url) if bandcamp_url else None
     tags = classify_item(title, clean_summary)
     item = {
-        "item_id": make_item_id(source, title.strip(), normalize_url(link) or ""),
+        "item_id": make_item_id(source, title.strip(), link),
         "source": source,
         "title": title.strip(),
-        "link": normalize_url(link) or "",
+        "link": link,
         "summary": clean_summary,
         "bandcamp_url": bandcamp_url or "",
-        "embed_url": embed_url or "",
+        "embed_url": "",
         "artist_guess": artist_guess,
         "album_guess": album_guess,
         "tags": tags,
@@ -525,6 +628,12 @@ def build_item(
         "source_score": source_score,
         "current_score": source_score,
     }
+    cached = get_cached_candidate(item["item_id"])
+    if cached:
+        item["bandcamp_url"] = item["bandcamp_url"] or str(cached["bandcamp_url"] or "")
+        item["embed_url"] = str(cached["embed_url"] or "")
+        if cached["show_count"] or cached["click_count"]:
+            item["current_score"] = float(cached["current_score"] or source_score)
     stats = record_candidate(item)
     item["feedback"] = stats
     item["current_score"] = score_item(item, stats)
@@ -532,6 +641,34 @@ def build_item(
         connection.execute(
             "UPDATE candidates SET current_score = ? WHERE item_id = ?",
             (float(item["current_score"]), item["item_id"]),
+        )
+    return item
+
+
+def hydrate_item_media(item: dict[str, Any]) -> dict[str, Any]:
+    if item.get("embed_url"):
+        return item
+
+    bandcamp_url = str(item.get("bandcamp_url") or "")
+    if not bandcamp_url:
+        search_query = " ".join(
+            part for part in [item["artist_guess"], item["album_guess"], item["title"]] if part
+        )
+        bandcamp_url = search_bandcamp(search_query) or ""
+
+    embed_url = get_bandcamp_embed(bandcamp_url) if bandcamp_url else ""
+    item["bandcamp_url"] = bandcamp_url
+    item["embed_url"] = embed_url or ""
+    item["current_score"] = score_item(item, item["feedback"])
+
+    with get_db() as connection:
+        connection.execute(
+            """
+            UPDATE candidates
+            SET bandcamp_url = ?, embed_url = ?, current_score = ?
+            WHERE item_id = ?
+            """,
+            (item["bandcamp_url"], item["embed_url"], float(item["current_score"]), item["item_id"]),
         )
     return item
 
@@ -600,7 +737,14 @@ def fetch_reddit_items() -> list[dict[str, Any]]:
     return items
 
 
-def pick_rotating_items(seed: str | None = None) -> list[dict[str, Any]]:
+def pick_rotating_items(seed: str | None = None, force_refresh: bool = False) -> list[dict[str, Any]]:
+    if not should_refresh_sources(force=force_refresh):
+        items = load_cached_items()
+        rng = Random(seed or datetime.utcnow().strftime("%Y-%m-%d-%H-%M-%S"))
+        rng.shuffle(items)
+        items.sort(key=lambda item: (bool(item["owned"]), not bool(item["embed_url"]), -float(item["current_score"])))
+        return items
+
     pool = fetch_blog_items() + fetch_reddit_items()
     unique: dict[tuple[str, str], dict[str, Any]] = {}
 
@@ -617,6 +761,12 @@ def pick_rotating_items(seed: str | None = None) -> list[dict[str, Any]]:
     rng = Random(seed or datetime.utcnow().strftime("%Y-%m-%d-%H-%M-%S"))
     rng.shuffle(items)
     items.sort(key=lambda item: (bool(item["owned"]), -float(item["current_score"])))
+    hydration_limit = min(len(items), 18)
+    hydrated = [hydrate_item_media(item) for item in items[:hydration_limit]]
+    if hydration_limit:
+        items[:hydration_limit] = hydrated
+        items.sort(key=lambda item: (bool(item["owned"]), not bool(item["embed_url"]), -float(item["current_score"])))
+    set_state("last_refresh_at", datetime.utcnow().isoformat())
     return items
 
 
@@ -855,8 +1005,9 @@ def outgoing(item_id: str) -> RedirectResponse:
 @app.get("/", response_class=HTMLResponse)
 def home(request: Request) -> str:
     seed = request.query_params.get("seed")
+    force_refresh = request.query_params.get("refresh") == "1"
     generated_at = datetime.utcnow().strftime("%Y-%m-%d %H:%M UTC")
-    picks = pick_rotating_items(seed=seed)
+    picks = pick_rotating_items(seed=seed, force_refresh=force_refresh)
     showcase_items = select_showcase_items(picks, limit=10)
     track_impression(showcase_items)
 
@@ -903,41 +1054,12 @@ def home(request: Request) -> str:
             margin: 0 auto;
             padding: 28px 18px 56px;
           }}
-          .hero {{
-            background: linear-gradient(135deg, rgba(18,24,32,0.92), rgba(18,24,32,0.72));
-            border: 1px solid var(--edge);
-            border-radius: 28px;
-            padding: 28px 28px 22px;
-            backdrop-filter: blur(18px);
-            box-shadow: 0 24px 80px rgba(0, 0, 0, 0.28);
-          }}
-          .kicker {{
-            text-transform: uppercase;
-            letter-spacing: 0.22em;
-            font-size: 0.7rem;
-            color: var(--accent);
-            margin: 0 0 12px;
-          }}
-          h1 {{
-            margin: 0;
-            font-size: clamp(2.8rem, 8vw, 6rem);
-            line-height: 0.9;
-            max-width: 10ch;
-            letter-spacing: -0.04em;
-          }}
-          .intro {{
-            max-width: 38rem;
-            font-size: 1rem;
-            line-height: 1.55;
-            color: var(--muted);
-            margin: 14px 0 0;
-          }}
           .toolbar {{
             display: flex;
             flex-wrap: wrap;
             align-items: center;
             gap: 12px;
-            margin-top: 18px;
+            margin-bottom: 18px;
           }}
           .button {{
             appearance: none;
@@ -1042,10 +1164,6 @@ def home(request: Request) -> str:
             .shell {{
               padding: 20px 14px 48px;
             }}
-            .hero {{
-              padding: 20px;
-              border-radius: 22px;
-            }}
             .card-head {{
               flex-direction: column;
             }}
@@ -1057,18 +1175,11 @@ def home(request: Request) -> str:
       </head>
       <body>
         <main class="shell">
-          <section class="hero">
-            <p class="kicker">Live underground feed</p>
-            <h1>Live Bandcamp finds</h1>
-            <p class="intro">
-              Ten live Bandcamp-led finds pulled from blogs and Reddit, filtered away from your library when possible and tuned by your feedback.
-            </p>
-            <div class="toolbar">
-              <button class="button" onclick="window.location='/?seed=' + Date.now()">Refresh 10 picks</button>
-              <span class="stamp">Generated {generated_at}</span>
-              <span class="stamp">{filtered_count} owned matches pushed down</span>
-            </div>
-          </section>
+          <div class="toolbar">
+            <button class="button" onclick="window.location='/?refresh=1&seed=' + Date.now()">Refresh 10 picks</button>
+            <span class="stamp">Generated {generated_at}</span>
+            <span class="stamp">{filtered_count} owned matches pushed down</span>
+          </div>
           <section class="grid">
             {card_html}
           </section>
