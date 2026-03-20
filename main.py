@@ -9,7 +9,7 @@ from urllib.parse import quote
 import feedparser
 import requests
 from bs4 import BeautifulSoup
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.responses import HTMLResponse
 
 app = FastAPI()
@@ -183,7 +183,7 @@ def fetch_reddit_items() -> list[dict[str, str]]:
     return items
 
 
-def pick_rotating_items() -> list[dict[str, str]]:
+def pick_rotating_items(seed: str | None = None) -> list[dict[str, str]]:
     pool = fetch_blog_items() + fetch_reddit_items()
 
     unique: dict[tuple[str, str], dict[str, str]] = {}
@@ -193,8 +193,8 @@ def pick_rotating_items() -> list[dict[str, str]]:
             unique[key] = item
 
     items = list(unique.values())
-    seed = datetime.utcnow().strftime("%Y-%m-%d-%H")
-    Random(seed).shuffle(items)
+    shuffle_seed = seed or datetime.utcnow().strftime("%Y-%m-%d-%H-%M")
+    Random(shuffle_seed).shuffle(items)
     return items[:12]
 
 
@@ -230,8 +230,10 @@ def render_card(item: dict[str, str]) -> str:
 
 
 @app.get("/", response_class=HTMLResponse)
-def home() -> str:
-    picks = pick_rotating_items()
+def home(request: Request) -> str:
+    seed = request.query_params.get("seed")
+    generated_at = datetime.utcnow().strftime("%Y-%m-%d %H:%M UTC")
+    picks = pick_rotating_items(seed=seed)
     cards = "".join(render_card(item) for item in picks)
 
     return f"""
@@ -294,6 +296,30 @@ def home() -> str:
             line-height: 1.6;
             color: var(--muted);
             margin-top: 18px;
+          }}
+          .toolbar {{
+            display: flex;
+            flex-wrap: wrap;
+            align-items: center;
+            gap: 12px;
+            margin-top: 22px;
+          }}
+          .button {{
+            appearance: none;
+            border: 0;
+            border-radius: 999px;
+            background: var(--ink);
+            color: #f8f0e5;
+            padding: 12px 18px;
+            font: inherit;
+            cursor: pointer;
+          }}
+          .button:hover {{
+            background: var(--accent);
+          }}
+          .stamp {{
+            color: var(--muted);
+            font-size: 0.92rem;
           }}
           .grid {{
             display: grid;
@@ -378,8 +404,15 @@ def home() -> str:
             <p class="intro">
               A changing stack of ambient, experimental and hard-to-find releases
               pulled from blogs and Reddit, then pushed toward Bandcamp when a trail exists.
-              The mix reshuffles every hour so it does not freeze around the same names.
+              It pulls live on each request and reshuffles every refresh so it does not
+              freeze around the same names.
             </p>
+            <div class="toolbar">
+              <button class="button" onclick="window.location='/?seed=' + Date.now()">
+                Refresh finds
+              </button>
+              <span class="stamp">Generated {generated_at}</span>
+            </div>
           </section>
           <section class="grid">
             {cards}
