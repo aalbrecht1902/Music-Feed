@@ -71,6 +71,15 @@ GENERIC_POST_PATTERNS = [
     "top ambient",
 ]
 
+BLOCKED_TITLE_PATTERNS = [
+    "acl 2026 spring music preview",
+    "spring music preview",
+    "apuesta",
+    "casino",
+    "bet",
+    "juеgos",
+]
+
 CATEGORY_KEYWORDS = {
     "dub-techno": [
         "dub techno",
@@ -304,6 +313,11 @@ def classify_item(title: str, summary: str) -> list[str]:
 def is_generic_post(title: str) -> bool:
     lowered = title.lower()
     return any(pattern in lowered for pattern in GENERIC_POST_PATTERNS)
+
+
+def is_blocked_title(title: str) -> bool:
+    lowered = title.lower()
+    return any(pattern in lowered for pattern in BLOCKED_TITLE_PATTERNS)
 
 
 def get_bandcamp_embed(url: str | None) -> str | None:
@@ -690,7 +704,7 @@ def fetch_blog_items() -> list[dict[str, Any]]:
                 link = entry.get("link", "").strip()
                 summary = entry.get("summary", "") or entry.get("description", "")
                 bandcamp_url = extract_bandcamp_url(summary, link)
-                if title and link:
+                if title and link and not is_blocked_title(title):
                     items.append(
                         build_item(
                             source=source_name,
@@ -718,7 +732,7 @@ def fetch_reddit_items() -> list[dict[str, Any]]:
             for child in children:
                 data = child.get("data", {})
                 title = data.get("title", "").strip()
-                if not title or is_generic_post(title):
+                if not title or is_generic_post(title) or is_blocked_title(title):
                     continue
                 post_url = normalize_url(data.get("url"))
                 permalink = normalize_url(f"https://www.reddit.com{data.get('permalink', '')}")
@@ -906,14 +920,12 @@ def make_blurb(item: dict[str, Any]) -> str:
 
 def select_showcase_items(items: list[dict[str, Any]], limit: int = 10) -> list[dict[str, Any]]:
     playable = [item for item in items if item["embed_url"] and not item["owned"]]
-    fallback = [item for item in items if not item["owned"]]
     owned_playable = [item for item in items if item["embed_url"] and item["owned"]]
-    owned_fallback = [item for item in items if item["owned"]]
 
     chosen: list[dict[str, Any]] = []
     seen: set[str] = set()
 
-    for pool in (playable, owned_playable, fallback, owned_fallback):
+    for pool in (playable, owned_playable):
         for item in pool:
             if item["item_id"] in seen:
                 continue
@@ -1016,7 +1028,7 @@ def home(request: Request) -> str:
     generated_at = datetime.utcnow().strftime("%Y-%m-%d %H:%M UTC")
     picks = pick_rotating_items(seed=seed, force_refresh=force_refresh)
     showcase_items = select_showcase_items(picks, limit=10)
-    if count_playable(showcase_items) < 4 and not force_refresh:
+    if count_playable(showcase_items) < 8 and not force_refresh:
         picks = pick_rotating_items(seed=seed, force_refresh=True)
         showcase_items = select_showcase_items(picks, limit=10)
     track_impression(showcase_items)
@@ -1024,6 +1036,11 @@ def home(request: Request) -> str:
     library_path = find_library_path()
     filtered_count = sum(1 for item in picks if bool(item["owned"]))
     card_html = "".join(render_card(item) for item in showcase_items)
+    empty_html = """
+      <section class="empty">
+        <p>No playable Bandcamp finds yet. Hit refresh to force a new crawl.</p>
+      </section>
+    """ if not showcase_items else ""
     library_note = (
         f"Library filter active from {escape(os.path.basename(library_path))}."
         if library_path
@@ -1170,6 +1187,14 @@ def home(request: Request) -> str:
             color: var(--muted);
             font-size: 0.85rem;
           }}
+          .empty {{
+            margin-top: 24px;
+            border: 1px solid var(--edge);
+            border-radius: 24px;
+            padding: 22px;
+            color: var(--muted);
+            background: linear-gradient(180deg, var(--panel) 0%, var(--panel-strong) 100%);
+          }}
           @media (max-width: 640px) {{
             .shell {{
               padding: 20px 14px 48px;
@@ -1193,6 +1218,7 @@ def home(request: Request) -> str:
           <section class="grid">
             {card_html}
           </section>
+          {empty_html}
           <p class="footer">
             Sources: A Closer Listen, Headphone Commute, Fluid Radio, Boomkat,
             r/ambientmusic, r/experimentalmusic, r/BandCamp. {library_note}
