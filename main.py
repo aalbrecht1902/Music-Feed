@@ -794,31 +794,7 @@ def hydrate_item_media(item: dict[str, Any]) -> dict[str, Any]:
 
 
 def fetch_blog_items() -> list[dict[str, Any]]:
-    items: list[dict[str, Any]] = []
-    for source_name, feed_url in BLOG_FEEDS:
-        try:
-            feed = feedparser.parse(feed_url)
-            for entry in feed.entries[:10]:
-                title = entry.get("title", "").strip()
-                link = entry.get("link", "").strip()
-                summary = entry.get("summary", "") or entry.get("description", "")
-                bandcamp_url = extract_bandcamp_url(summary, link)
-                embed_url = extract_bandcamp_embed(summary, link)
-                if title and link and not is_blocked_title(title):
-                    items.append(
-                        build_item(
-                            source=source_name,
-                            title=title,
-                            link=link,
-                            summary=summary,
-                            bandcamp_url=bandcamp_url,
-                            embed_url=embed_url,
-                            source_score=SOURCE_WEIGHTS.get(source_name, 1.0),
-                        )
-                    )
-        except Exception as exc:
-            print(f"Feed failed for {source_name}: {exc}")
-    return items
+    return []
 
 
 def fetch_bandcamp_feed_items() -> list[dict[str, Any]]:
@@ -850,43 +826,7 @@ def fetch_bandcamp_feed_items() -> list[dict[str, Any]]:
 
 
 def fetch_reddit_items() -> list[dict[str, Any]]:
-    items: list[dict[str, Any]] = []
-    for source_name, url in REDDIT_SOURCES:
-        try:
-            response = requests.get(url, headers=HEADERS, timeout=12)
-            response.raise_for_status()
-            payload = response.json()
-            children = payload.get("data", {}).get("children", [])
-
-            for child in children:
-                data = child.get("data", {})
-                title = data.get("title", "").strip()
-                if not title or is_generic_post(title) or is_blocked_title(title):
-                    continue
-                post_url = normalize_url(data.get("url"))
-                permalink = normalize_url(f"https://www.reddit.com{data.get('permalink', '')}")
-                summary = data.get("selftext", "")
-                bandcamp_url = extract_bandcamp_url(post_url, summary)
-                embed_url = extract_bandcamp_embed(post_url, summary)
-                link = post_url or permalink or ""
-                reddit_score = float(data.get("score") or 0)
-
-                if title and link:
-                    items.append(
-                        build_item(
-                            source=source_name,
-                            title=title,
-                            link=link,
-                            summary=summary,
-                            bandcamp_url=bandcamp_url,
-                            embed_url=embed_url,
-                            source_score=SOURCE_WEIGHTS.get(source_name, 1.0)
-                            + min(reddit_score / 50.0, 1.4),
-                        )
-                    )
-        except Exception as exc:
-            print(f"Reddit fetch failed for {source_name}: {exc}")
-    return items
+    return []
 
 
 def pick_rotating_items(seed: str | None = None, force_refresh: bool = False) -> list[dict[str, Any]]:
@@ -897,7 +837,8 @@ def pick_rotating_items(seed: str | None = None, force_refresh: bool = False) ->
         items.sort(key=lambda item: (bool(item["owned"]), not bool(item["embed_url"]), -float(item["current_score"])))
         return items
 
-    pool = fetch_bandcamp_feed_items() + fetch_blog_items() + fetch_reddit_items()
+    cached_before_refresh = load_cached_items()
+    pool = fetch_bandcamp_feed_items()
     unique: dict[tuple[str, str], dict[str, Any]] = {}
 
     for item in pool:
@@ -918,6 +859,8 @@ def pick_rotating_items(seed: str | None = None, force_refresh: bool = False) ->
     if hydration_limit:
         items[:hydration_limit] = hydrated
         items.sort(key=lambda item: (bool(item["owned"]), not bool(item["embed_url"]), -float(item["current_score"])))
+    if count_playable(items) < 6 and count_playable(cached_before_refresh) > count_playable(items):
+        items = cached_before_refresh
     set_state("last_refresh_at", datetime.utcnow().isoformat())
     return items
 
@@ -1309,8 +1252,9 @@ def home(request: Request) -> str:
           }}
           iframe {{
             width: 100%;
-            min-height: 472px;
+            height: 122px;
             border: 0;
+            display: block;
           }}
           .feedback {{
             margin-top: 14px;
@@ -1336,7 +1280,7 @@ def home(request: Request) -> str:
               flex-direction: column;
             }}
             iframe {{
-              min-height: 420px;
+              height: 122px;
             }}
           }}
         </style>
