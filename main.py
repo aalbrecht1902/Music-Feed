@@ -532,12 +532,19 @@ def load_cached_items(limit: int = 60) -> list[dict[str, Any]]:
     return items
 
 
+def count_playable(items: list[dict[str, Any]]) -> int:
+    return sum(1 for item in items if item.get("embed_url"))
+
+
 def should_refresh_sources(force: bool = False) -> bool:
     if force:
         return True
 
-    cached_count = len(load_cached_items(limit=12))
+    cached_items = load_cached_items(limit=12)
+    cached_count = len(cached_items)
     if cached_count < 10:
+        return True
+    if count_playable(cached_items) < 6:
         return True
 
     last_refresh = get_state("last_refresh_at")
@@ -761,7 +768,7 @@ def pick_rotating_items(seed: str | None = None, force_refresh: bool = False) ->
     rng = Random(seed or datetime.utcnow().strftime("%Y-%m-%d-%H-%M-%S"))
     rng.shuffle(items)
     items.sort(key=lambda item: (bool(item["owned"]), -float(item["current_score"])))
-    hydration_limit = min(len(items), 18)
+    hydration_limit = min(len(items), 30)
     hydrated = [hydrate_item_media(item) for item in items[:hydration_limit]]
     if hydration_limit:
         items[:hydration_limit] = hydrated
@@ -906,7 +913,7 @@ def select_showcase_items(items: list[dict[str, Any]], limit: int = 10) -> list[
     chosen: list[dict[str, Any]] = []
     seen: set[str] = set()
 
-    for pool in (playable, fallback, owned_playable, owned_fallback):
+    for pool in (playable, owned_playable, fallback, owned_fallback):
         for item in pool:
             if item["item_id"] in seen:
                 continue
@@ -1009,6 +1016,9 @@ def home(request: Request) -> str:
     generated_at = datetime.utcnow().strftime("%Y-%m-%d %H:%M UTC")
     picks = pick_rotating_items(seed=seed, force_refresh=force_refresh)
     showcase_items = select_showcase_items(picks, limit=10)
+    if count_playable(showcase_items) < 4 and not force_refresh:
+        picks = pick_rotating_items(seed=seed, force_refresh=True)
+        showcase_items = select_showcase_items(picks, limit=10)
     track_impression(showcase_items)
 
     library_path = find_library_path()
