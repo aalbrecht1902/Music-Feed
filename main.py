@@ -60,6 +60,7 @@ BANDCAMP_FEEDS = [
 ]
 
 BANDCAMP_RE = re.compile(r"https?://[^\s\"'>]+bandcamp\.com[^\s\"'>]*", re.IGNORECASE)
+EMBED_RE = re.compile(r"https?://bandcamp\.com/EmbeddedPlayer/[^\s\"'>]+", re.IGNORECASE)
 TITLE_SPLIT_RE = re.compile(r"\s(?:[-|:]\s|by\s)", re.IGNORECASE)
 YEAR_RE = re.compile(r"\b(19|20)\d{2}\b")
 
@@ -259,6 +260,16 @@ def extract_bandcamp_url(*values: str | None) -> str | None:
         if not value:
             continue
         match = BANDCAMP_RE.search(value)
+        if match:
+            return normalize_url(match.group(0))
+    return None
+
+
+def extract_bandcamp_embed(*values: str | None) -> str | None:
+    for value in values:
+        if not value:
+            continue
+        match = EMBED_RE.search(value)
         if match:
             return normalize_url(match.group(0))
     return None
@@ -711,6 +722,7 @@ def build_item(
     link: str,
     summary: str = "",
     bandcamp_url: str | None = None,
+    embed_url: str | None = None,
     source_score: float = 0.0,
 ) -> dict[str, Any]:
     clean_summary = clean_text(summary)
@@ -728,7 +740,7 @@ def build_item(
         "link": link,
         "summary": clean_summary,
         "bandcamp_url": bandcamp_url or "",
-        "embed_url": "",
+        "embed_url": normalize_url(embed_url) or "",
         "artist_guess": artist_guess,
         "album_guess": album_guess,
         "tags": tags,
@@ -791,6 +803,7 @@ def fetch_blog_items() -> list[dict[str, Any]]:
                 link = entry.get("link", "").strip()
                 summary = entry.get("summary", "") or entry.get("description", "")
                 bandcamp_url = extract_bandcamp_url(summary, link)
+                embed_url = extract_bandcamp_embed(summary, link)
                 if title and link and not is_blocked_title(title):
                     items.append(
                         build_item(
@@ -799,6 +812,7 @@ def fetch_blog_items() -> list[dict[str, Any]]:
                             link=link,
                             summary=summary,
                             bandcamp_url=bandcamp_url,
+                            embed_url=embed_url,
                             source_score=SOURCE_WEIGHTS.get(source_name, 1.0),
                         )
                     )
@@ -816,6 +830,7 @@ def fetch_bandcamp_feed_items() -> list[dict[str, Any]]:
                 title = entry.get("title", "").strip()
                 link = normalize_url(entry.get("link", "").strip())
                 summary = entry.get("summary", "") or entry.get("description", "")
+                embed_url = extract_bandcamp_embed(summary, link)
                 if not title or not link or is_blocked_title(title):
                     continue
                 items.append(
@@ -825,6 +840,7 @@ def fetch_bandcamp_feed_items() -> list[dict[str, Any]]:
                         link=link,
                         summary=summary,
                         bandcamp_url=link,
+                        embed_url=embed_url,
                         source_score=4.2,
                     )
                 )
@@ -851,6 +867,7 @@ def fetch_reddit_items() -> list[dict[str, Any]]:
                 permalink = normalize_url(f"https://www.reddit.com{data.get('permalink', '')}")
                 summary = data.get("selftext", "")
                 bandcamp_url = extract_bandcamp_url(post_url, summary)
+                embed_url = extract_bandcamp_embed(post_url, summary)
                 link = post_url or permalink or ""
                 reddit_score = float(data.get("score") or 0)
 
@@ -862,6 +879,7 @@ def fetch_reddit_items() -> list[dict[str, Any]]:
                             link=link,
                             summary=summary,
                             bandcamp_url=bandcamp_url,
+                            embed_url=embed_url,
                             source_score=SOURCE_WEIGHTS.get(source_name, 1.0)
                             + min(reddit_score / 50.0, 1.4),
                         )
